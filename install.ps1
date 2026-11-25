@@ -32,18 +32,24 @@ function Get-Flavor {
   }
 }
 
+function Get-UserPath {
+  $property = Get-ItemProperty -Path 'HKCU:\Environment' -Name Path -ErrorAction SilentlyContinue
+  if ($property.PSPath) {
+    return (Get-Item -LiteralPath $property.PSPath).GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+  }
+  return [string]$property.Path
+}
+
+function Test-UserPathEntry([string]$Current, [string]$Directory) {
+  return [bool]($Current -split ';' | Where-Object { $_.Trim().Trim('"').TrimEnd('\') -ieq $Directory.TrimEnd('\') })
+}
+
 function Add-UserPath {
   param([Parameter(Mandatory)][string]$Directory)
-
   $envKey = "HKCU:\Environment"
-  $current = (Get-ItemProperty -Path $envKey -Name Path -ErrorAction SilentlyContinue).Path
-  $parts = @()
-  if (-not [string]::IsNullOrWhiteSpace($current)) {
-    $parts = $current -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-  }
-
-  if ($parts | Where-Object { $_.TrimEnd('\') -ieq $Directory.TrimEnd('\') }) {
-    $env:PATH = "$Directory;$env:PATH"
+  $current = Get-UserPath
+  if (Test-UserPathEntry $current $Directory) {
+    if (!(Test-UserPathEntry $env:PATH $Directory)) { $env:PATH = "$Directory;$env:PATH" }
     Write-Host "PATH already contains: $Directory"
     return
   }
@@ -52,6 +58,66 @@ function Add-UserPath {
   Set-ItemProperty -Path $envKey -Name Path -Value $newPath
   $env:PATH = "$Directory;$env:PATH"
   Write-Host "Added to user PATH: $Directory"
+}
+
+function Assert-OrdinaryInstallPath([string]$Path) {
+  while ($Path) {
+    $entry = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if ($entry -and ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+      throw "The CLI installer cannot write through a linked path: $Path"
+    }
+    $Path = [IO.Path]::GetDirectoryName($Path)
+  }
+}
+
+function Install-CliPayload([string]$Source) {
+  $mutex = [Threading.Mutex]::new($false, 'Local\GSBT-StandaloneCliMaintenance')
+  try {
+    try { $locked = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $locked = $true }
+    if (!$locked) { throw 'Another CLI installation or removal is in progress.' }
+    Assert-OrdinaryInstallPath $DefaultInstallDir
+    if ((Test-Path -LiteralPath (Join-Path $DefaultInstallDir 'gsbt-main.exe')) -or
+        (Get-ChildItem -LiteralPath $DefaultInstallDir -Filter 'unins*.dat' -File -ErrorAction SilentlyContinue)) {
+      throw 'The desktop installation already includes the CLI. Use its updater to update that copy.'
+    }
+    $receipt = Join-Path $DefaultInstallDir '.gsbt-cli-install'
+    Assert-OrdinaryInstallPath $receipt
+    $prior = @()
+    $header = 'GSBT CLI 1 keep-path'
+    if (Test-Path -LiteralPath $receipt -PathType Leaf) {
+      $old = [IO.File]::ReadAllLines($receipt)
+      if ($old.Count -lt 2 -or $old[0] -cnotin 'GSBT CLI 1 keep-path','GSBT CLI 1 own-path') { throw 'Invalid existing CLI receipt.' }
+      $header = $old[0]
+      $prior = $old[1..($old.Count-1)]
+    }
+    if (!(Test-UserPathEntry (Get-UserPath) $DefaultInstallDir)) { $header = 'GSBT CLI 1 own-path' }
+    $files = @(Get-ChildItem -LiteralPath $Source -Recurse -File -Force)
+    $entries = foreach ($file in $files) {
+      $name = $file.FullName.Substring($Source.Length + 1)
+      if ($name -eq '.gsbt-cli-install' -or $name.Split([IO.Path]::DirectorySeparatorChar)[0] -eq 'gsbt') { throw "Unexpected CLI package path: $name" }
+      Assert-OrdinaryInstallPath (Join-Path $DefaultInstallDir $name)
+      (Get-FileHash -LiteralPath $file.FullName).Hash + '  ' + $name
+    }
+    [void][IO.Directory]::CreateDirectory($DefaultInstallDir)
+    # Install can be interrupted after any copy. Until the next install the receipt
+    # covers both old and new packaged bytes, including files retired by an update.
+    $tempReceipt = Join-Path $DefaultInstallDir ('.gsbt-cli-install-' + [guid]::NewGuid().ToString('N'))
+    try {
+      $hashes = @($prior) + @($entries) | Sort-Object -Unique
+      [IO.File]::WriteAllLines($tempReceipt, [string[]](@($header) + @($hashes)), [Text.UTF8Encoding]::new($false))
+      if ([IO.File]::Exists($receipt)) { [IO.File]::Replace($tempReceipt, $receipt, [System.Management.Automation.Language.NullString]::Value) }
+      else { [IO.File]::Move($tempReceipt, $receipt) }
+    } finally { if ([IO.File]::Exists($tempReceipt)) { [IO.File]::Delete($tempReceipt) } }
+    foreach ($file in $files) {
+      $destination = Join-Path $DefaultInstallDir $file.FullName.Substring($Source.Length + 1)
+      [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($destination))
+      [IO.File]::Copy($file.FullName, $destination, $true)
+    }
+    Add-UserPath -Directory $DefaultInstallDir
+  } finally {
+    if ($locked) { $mutex.ReleaseMutex() }
+    $mutex.Dispose()
+  }
 }
 
 function Get-Release {
@@ -105,16 +171,15 @@ function Install-CliZip {
       throw "CLI zip did not contain gsbt.exe."
     }
 
-    New-Item -ItemType Directory -Path $DefaultInstallDir -Force | Out-Null
     Write-Host "Installing CLI into: $DefaultInstallDir"
-    Copy-Item -Path (Join-Path $source "*") -Destination $DefaultInstallDir -Recurse -Force
-
-    Add-UserPath -Directory $DefaultInstallDir
+    Install-CliPayload $source
 
     Write-Host ""
     Write-Host "GSBT Terminal installed. Open a new terminal and try:"
+    Write-Host "  gsbt            # interactive prompt"
     Write-Host "  gsbt status"
     Write-Host "  gsbt get gui    # optional desktop app"
+    Write-Host "  gsbt uninstall  # remove this standalone installation"
   }
   finally {
     Remove-Item -LiteralPath $tempZip -Force -ErrorAction SilentlyContinue

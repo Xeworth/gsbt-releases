@@ -1,6 +1,6 @@
 # Game Save Backup Tool — Agent Manual
 
-**Version:** aligns with `agentDocumentation.notebookVersion` from `gsbt help --ai` (currently 2026-11-23.1)
+**Version:** aligns with `agentDocumentation.notebookVersion` from `gsbt help --ai` (currently 2026-11-24.1)
 
 **Audience:** AI agents and automation (Cursor, Codex, Claude Code, Antigravity, scripts).  
 **Humans:** use `gsbt help` or `gsbt gui`.
@@ -42,7 +42,7 @@ After copying, **lock this manual in session memory**. Only re-run `gsbt help --
 
 | Do | Don't |
 |----|--------|
-| `gsbt <command> … --ai` for every automated step | `gsbt cli` (human REPL only) |
+| `gsbt <command> … --ai` for every automated step | `gsbt` or `gsbt cli` (interactive human prompt) |
 | Parse **one** final JSON object from **stdout** | Treat stderr progress as success/failure |
 | Watch **stderr** during backup/compress/migrate/scan | Assume hang when stdout is quiet |
 | `migrate --dry-run` before `migrate --yes` | Skip preview on post-reinstall restores |
@@ -124,7 +124,7 @@ The terminal scan, backup, compression, verification, restore and migration comm
 | Surface | Command | User |
 |---------|---------|------|
 | **Agent automation** | `gsbt <cmd> --ai` | Agents, CI |
-| **Human shell** | `gsbt cli` | Humans — type `list`, `backup` without `gsbt` prefix |
+| **Human shell** | `gsbt` or `gsbt cli` | Humans — type `list`, `backup` without `gsbt` prefix |
 | **GUI** | `gsbt gui` | Humans — WinUI desktop |
 
 All surfaces share the same catalog and settings.
@@ -185,7 +185,7 @@ gsbt backup "Descriptive Name" --ai
 
 Folder must exist on disk. Never register whole drives, `Windows`, `Program Files`, caches, or credential stores.
 
-If the user names a folder that is **not** in `gsbt list --ai`, search the list first. If it is still missing, explain the folder scope and obtain any missing authorization before `add custom`. A request to register and back up that exact folder already supplies this authorization.
+If the user names a folder that is **not** in `gsbt list --ai`, search the list first. If it is still missing, explain the folder scope and obtain any missing authorization before `add custom`. A request to register and backup that exact folder already supplies this authorization.
 
 ---
 
@@ -205,6 +205,7 @@ If the user names a folder that is **not** in `gsbt list --ai`, search the list 
 | Export catalog | `gsbt catalog export [path] --ai` |
 | Import catalog | `gsbt catalog import <path> [--replace] --ai` |
 | Settings | `gsbt settings [show\|backup-path\|compression …] --ai` |
+| Remove a script-installed standalone CLI | `gsbt uninstall --yes --ai` after explicit authorization. Success schedules removal after the CLI exits. |
 | Diagnostics | `gsbt diagnostics [--output file] --ai` |
 | Install GUI | `gsbt get gui --ai` (when CLI-only install) |
 
@@ -220,6 +221,7 @@ Chunky mode may **plateau** at one percentage (often ~75% or 99%) while 7-Zip wo
 
 - **New `percent` on stderr** = forward progress.
 - **`heartbeat: true`** every ~15s = GSBT is still alive at the same %. Tell the user a large chunk is still processing — do not report an error.
+- Compression settings accept a level number such as `gsbt settings compression set level 5 --ai`, threads as a number or `auto`, and mode as `together` or `separately`. The JSON mode values remain `chunky` (files together) and `smooth` (files separately).
 - **`knowledgeRef`** on events: `compression.chunky-large-batch-plateau`, `compression.archive-finalization`, `compression.progress-plateau`.
 - **99% heartbeat** = archive finalization; wait for final stdout JSON.
 - **Failure** only after explicit error, cancel, or final JSON with `success: false` — not from plateau alone.
@@ -255,7 +257,7 @@ GSBT is optimized for **game saves** but supports **any user-selected folder** v
 
 **Example (Warcraft III custom maps):** campaign saves may be absent while `Documents\Warcraft III\Maps` still matters — confirm Classic vs Reforged and OneDrive redirection; separate custom entries per folder the user values. Sources: PCGamingWiki (Reforged / RoC), Blizzard editor documentation.
 
-**Example (name collision):** “Back up Delta Force” with two catalog rows — ask reboot vs legacy, then verify the folder size/path locally before backup.
+**Example (name collision):** “Backup Delta Force” with two catalog rows — ask reboot vs legacy, then verify the folder size/path locally before backup.
 
 ---
 
